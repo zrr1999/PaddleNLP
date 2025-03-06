@@ -1,5 +1,6 @@
 # Copyright (c) 2025 PaddlePaddle Authors. All Rights Reserved.
-#
+#    Code from  https://github.com/deepseek-ai/DeepSeek-V3/blob/592fd5daf8177b205af11651bbb31a1834a8b0e0/inference/kernel.py
+#    MIT License Copyright (c) 2023 DeepSeek
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -19,8 +20,6 @@ import triton
 import triton.language as tl
 
 # from triton import Config
-# Code from  https://github.com/deepseek-ai/DeepSeek-V3/blob/592fd5daf8177b205af11651bbb31a1834a8b0e0/inference/kernel.py#L1
-# MIT License Copyright (c) 2023 DeepSeek
 
 @triton.jit
 def act_quant_kernel(x_ptr, y_ptr, s_ptr, BLOCK_SIZE: tl.constexpr):
