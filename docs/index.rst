@@ -74,9 +74,9 @@
    :maxdepth: 1
    :caption: 飞桨大模型特色技术
 
-   <llm/docs/unified_checkpoint.md>
-   <llm/docs/flashmask.md>
-   <llm/docs/llm_trainer.rst>
+   <./unified_checkpoint.md>
+   <./flashmask.md>
+   <./llm_trainer.rst>
 
 
 
