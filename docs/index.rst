@@ -79,9 +79,9 @@
    :maxdepth: 1
    :caption: 飞桨大模型特色技术
 
-  飞桨大模型统一存储文档 Unified Checkpoint <llm/docs/unified_checkpoint.md>
-  灵活注意力掩码 FlashMask <llm/docs/flashmask.md>
-  飞桨大模型统一训练器 PaddleNLP Trainer <llm/docs/llm_trainer.rst>
+   飞桨大模型统一存储文档 Unified Checkpoint <llm/docs/unified_checkpoint.md>
+   灵活注意力掩码 FlashMask <llm/docs/flashmask.md>
+   飞桨大模型统一训练器 PaddleNLP Trainer <llm/docs/llm_trainer.rst>
 
 
 .. toctree::
