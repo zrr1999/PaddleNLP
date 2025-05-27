@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from enum import Enum, unique
 from typing import Optional, Union
 
 from typing_extensions import override
+
+from .tool_utils import FunctionCall, get_tool_utils
 
 SLOTS = list[Union[str, set[str], dict[str, str]]]
 
@@ -40,6 +43,9 @@ class Role(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+    FUNCTIONCALL = "function_call"
+    TOOLS = "tools"
+    OBSERVATION = "observation"
 
 
 def extract_knowledge(text):
@@ -182,7 +188,6 @@ class StringFormatter(Formatter):
                 elements.append(slot)
             else:
                 raise RuntimeError(f"Input must be string, set[str] or dict[str, str], got {type(slot)}.")
-
         return elements
 
 
@@ -193,3 +198,50 @@ class KnowledgeFormatter(StringFormatter):
         content: str = extract_knowledge(kwargs.pop("content")) + "\n"
         idx: int = kwargs.pop("idx")
         return super().apply(content=content, idx=idx)
+
+
+@dataclass
+class FunctionFormatter(StringFormatter):
+    def __post_init__(self):
+        super().__post_init__()
+        self.tool_utils = get_tool_utils(self.tool_format)
+
+    @override
+    def apply(self, **kwargs) -> SLOTS:
+        content: str = kwargs.pop("content")
+        functions: list[FunctionCall] = []
+        try:
+            tool_calls = json.loads(content)
+            if not isinstance(tool_calls, list):  # parallel function call
+                tool_calls = [tool_calls]
+
+            for tool_call in tool_calls:
+                functions.append(
+                    FunctionCall(tool_call["name"], json.dumps(tool_call["arguments"], ensure_ascii=False))
+                )
+
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Invalid JSON format in function message: {str([content])}.")  # flat string
+
+        function_str = self.tool_utils.function_formatter(functions)
+
+        return super().apply(content=function_str)
+
+
+@dataclass
+class ToolFormatter(Formatter):
+    def __post_init__(self):
+        self.tool_utils = get_tool_utils(self.tool_format)
+
+    @override
+    def apply(self, **kwargs) -> SLOTS:
+        content = kwargs.pop("content")
+        try:
+            tools = json.loads(content)
+            return self.tool_utils.tool_formatter(tools) if len(tools) != 0 else ""
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Invalid JSON format in tool description: {str([content])}.")  # flat string
+
+    @override
+    def extract(self, content: str) -> Union[str, list["FunctionCall"]]:
+        return self.tool_utils.tool_extractor(content)

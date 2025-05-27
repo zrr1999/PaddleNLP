@@ -14,7 +14,6 @@
 
 import logging
 import os
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -53,12 +52,15 @@ class Template:
     format_assistant: "Formatter"
     format_system: "Formatter"
     format_knowledge: "Formatter"
+    format_tools: "Formatter"
+    format_function: "Formatter"
+    format_observation: "Formatter"
     format_prefix: "Formatter"
     default_system: str
     stop_words: list[str]
-    thought_words: tuple[str, str]
     efficient_eos: bool
     replace_eos: bool
+    thought_words: tuple
     replace_jinja_template: bool
 
     def encode_oneturn(
@@ -93,28 +95,10 @@ class Template:
             system = messages[0]["content"]
             messages = messages[1:]
         encoded_messages = self._encode(tokenizer, messages, system)
-        return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
-
-    def get_stop_token_ids(self, tokenizer: "PretrainedTokenizer") -> list[int]:
-        r"""Return stop token ids."""
-        stop_token_ids = {tokenizer.eos_token_id}
-        for token in self.stop_words:
-            stop_token_ids.add(tokenizer.convert_tokens_to_ids(token))
-
-        return list(stop_token_ids)
-
-    def add_thought(self, content: str) -> str:
-        r"""Add empty thought to assistant message."""
-        return f"{self.thought_words[0]}\n\n{self.thought_words[1]}\n\n" + content
-
-    def remove_thought(self, content: str) -> str:
-        r"""Remove thought from assistant message."""
-        pattern = re.compile(f"{re.escape(self.thought_words[0])}(.*?){re.escape(self.thought_words[1])}", re.DOTALL)
-        return re.sub(pattern, "", content).lstrip("\n")
-
-    def get_thought_word_ids(self, tokenizer: "PretrainedTokenizer") -> list[int]:
-        r"""Get the token ids of thought words."""
-        return tokenizer.encode(f"{self.thought_words[0]}\n\n{self.thought_words[1]}\n\n", add_special_tokens=False)
+        return [
+            (encoded_messages[i], encoded_messages[i + 1] if i + 1 < len(encoded_messages) else None)
+            for i in range(0, len(encoded_messages), 2)
+        ]
 
     def _convert_elements_to_ids(self, tokenizer: "PretrainedTokenizer", elements: "SLOTS") -> list[int]:
         r"""Convert elements to token ids."""
@@ -168,10 +152,17 @@ class Template:
                     elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
             elif message["role"] == Role.ASSISTANT:
                 elements += self.format_assistant.apply(content=message["content"])
+            elif message["role"] == Role.FUNCTIONCALL:
+                elements += self.format_function.apply(content=message["content"])
+            elif message["role"] == Role.TOOLS:
+                elements += self.format_tools.apply(content=message["content"])
+            elif message["role"] == Role.OBSERVATION:
+                elements += self.format_observation.apply(content=message["content"])
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            if len(elements) > 0:
+                encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
 
         return encoded_messages
 
@@ -242,7 +233,6 @@ class Template:
                     slot_items.append("'" + tokenizer.eos_token + "'")
             elif isinstance(slot, dict):
                 slot_items.append("'" + slot.get("token") + "'")
-                # raise ValueError("Dict is not supported.")
 
         return " + ".join(slot_items)
 
@@ -252,6 +242,9 @@ class Template:
         system = self._convert_slots_to_jinja(self.format_system.apply(), tokenizer, placeholder="system_message")
         user = self._convert_slots_to_jinja(self.format_user.apply(), tokenizer)
         assistant = self._convert_slots_to_jinja(self.format_assistant.apply(), tokenizer)
+        function_call = self._convert_slots_to_jinja(self.format_function.apply(), tokenizer)
+        tools = self._convert_slots_to_jinja(self.format_tools.apply(), tokenizer)
+        observation = self._convert_slots_to_jinja(self.format_observation.apply(), tokenizer)
         jinja_template = ""
         if prefix:
             jinja_template += "{{ " + prefix + " }}"
@@ -270,6 +263,12 @@ class Template:
                 "{{ " + user + " }}"
                 "{% elif message['role'] == 'assistant' %}"
                 "{{ " + assistant + " }}"
+                "{% elif message['role'] == 'function_call' %}"
+                "{{ " + function_call + " }}"
+                "{% elif message['role'] == 'tools' %}"
+                "{{ " + tools + " }}"
+                "{% elif message['role'] == 'observation' %}"
+                "{{ " + observation + " }}"
                 "{% endif %}"
                 "{% endfor %}"
             )
@@ -318,11 +317,14 @@ def register_template(
     format_assistant: Optional["Formatter"] = None,
     format_system: Optional["Formatter"] = None,
     format_knowledge: Optional["Formatter"] = None,
+    format_function: Optional["Formatter"] = None,
+    format_tools: Optional["Formatter"] = None,
+    format_observation: Optional["Formatter"] = None,
     format_prefix: Optional["Formatter"] = None,
     default_system: str = "",
     stop_words: Optional[list[str]] = None,
-    thought_words: Optional[tuple[str, str]] = None,
     efficient_eos: bool = False,
+    thought_words: Optional[tuple[str, str]] = None,
     replace_eos: bool = False,
     replace_jinja_template: bool = False,
     template_class: type["Template"] = Template,
@@ -360,10 +362,13 @@ def register_template(
         format_system=format_system or default_user_formatter,
         format_knowledge=format_knowledge,
         format_prefix=format_prefix or default_prefix_formatter,
+        format_function=format_function or default_prefix_formatter,
+        format_tools=format_tools or default_prefix_formatter,
+        format_observation=format_observation or default_prefix_formatter,
         default_system=default_system,
         stop_words=stop_words or [],
-        thought_words=thought_words or ("<think>", "</think>"),
         efficient_eos=efficient_eos,
+        thought_words=thought_words,
         replace_eos=replace_eos,
         replace_jinja_template=replace_jinja_template,
     )
@@ -385,10 +390,54 @@ def parse_template(tokenizer: "PretrainedTokenizer") -> "Template":
 
         return diff
 
+    """
+    1. prefix
+    2. system
+    2.1. global setting
+    2.2. tool des
+    3. role USER
+    4. role ASSISTANT
+    5. role FUNC
+    6. role OBSER
+    7. THINK option
+
+    {
+        messages: [
+            {"role": "system", "content": "你的名字是BookWiseBot，是一个专为二手书交易平台服务的智能图书顾问"},
+            {"role": "tool", "content": "[{
+                "type": "function",
+                "name": "search_books",
+                "description": "搜索二手书售卖信息，支持按标题、作者、ISBN和出版年份搜索相关结果",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "书籍的标题"},
+                        "author": {"type": "string", "description": "书籍的作者"},
+                        "isbn": {"type": "string", "description": "书籍的国际标准书号(ISBN)"},
+                        "publish_year": {"type": "string","description": "书籍的出版年份"}
+                    },
+                    "required": []
+                },
+                "strict": true
+            }]",
+            {"role": "user", "content": "看看《百年孤独》二手多少钱？"},
+            {"role": "function_call, "content": "{'name': 'search_books.call', 'arguments': {"title": "百年孤独"}}"},
+
+            {"role": "observation", "content": "{"books": [{"purchase_link": "http://bookstore.example.com/bookid-12345", "price": "￥80.00", "condition": 95, "book_id": "bookid-12345"}, {"purchase_link": "http://bookstore.example.com/bookid-12346", "price": "￥120.00", "condition": 100, "book_id": "bookid-12346"}, {"purchase_link": "http://usedbooks.example.com/bookid-12347", "price": "￥50.00", "condition": 80, "book_id": "bookid-12347"}]}"},
+
+            {"role": "assistant", "content": "搜集到了三个不同条件《百年孤独》的售价和平均价格为65元。"},
+        ],
+        think: True,
+        global_setting: str
+    }
+    """
     prefix = tokenizer.decode(tokenizer.encode("")["input_ids"])
 
     messages = [{"role": "system", "content": "{{content}}"}]
     system_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)[len(prefix) :]
+
+    messages = [{"role": "tool", "content": "{{content}}"}]
+    tool_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)[len(prefix) :]
 
     messages = [{"role": "system", "content": ""}, {"role": "user", "content": "{{content}}"}]
     user_slot_empty_system = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -398,16 +447,23 @@ def parse_template(tokenizer: "PretrainedTokenizer") -> "Template":
     user_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
     user_slot = user_slot[len(prefix) :]
 
+    messages = [{"role": "function_call", "content": "{{content}}"}]
+    fc_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    fc_slot = fc_slot[len(prefix) :]
+
+    messages = [{"role": "observation", "content": "{{content}}"}]
+    ob_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    ob_slot = fc_slot[len(prefix) :]
+
     messages = [{"role": "user", "content": "{{content}}"}, {"role": "assistant", "content": "{{content}}"}]
     assistant_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-
+    assistant_slot = tokenizer.encode(assistant_slot[len(prefix) + len(user_slot) :], add_special_tokens=False)[
+        "input_ids"
+    ]
     messages = [
         {"role": "user", "content": "{{content}}"},
         {"role": "assistant", "content": "{{content}}"},
         {"role": "user", "content": "{{content}}"},
-    ]
-    assistant_slot = tokenizer.encode(assistant_slot[len(prefix) + len(user_slot) :], add_special_tokens=False)[
-        "input_ids"
     ]
 
     # In case of <diag_eos_token> + <eos_token>
@@ -416,15 +472,7 @@ def parse_template(tokenizer: "PretrainedTokenizer") -> "Template":
         assistant_slot_further[len(prefix) + len(user_slot) :], add_special_tokens=False
     )["input_ids"]
 
-    # if assistant_slot[-1] in tokenizer.added_tokens_decoder.keys():
-    #    #
-    #    if assistant_slot[-1] in tokenizer.added_tokens_decoder.keys():
-    #    else:
-    # else:
-
     assistant_slot = tokenizer.decode(os.path.commonprefix([assistant_slot, assistant_slot_further]))
-
-    assistant_slot = assistant_slot.replace("<think>", "").replace("</think>", "").lstrip("\n")  # remove thought tags
 
     if len(user_slot) > len(user_slot_empty_system):
         default_system = find_diff(user_slot_empty_system, user_slot)
@@ -433,15 +481,21 @@ def parse_template(tokenizer: "PretrainedTokenizer") -> "Template":
     else:  # if defaut_system is empty, user_slot_empty_system will be longer than user_slot
         default_system = ""
 
+    import pdb
+
+    pdb.set_trace()
     return Template(
         format_user=StringFormatter(slots=[user_slot]),
         format_assistant=StringFormatter(slots=[assistant_slot]),
         format_system=StringFormatter(slots=[system_slot]),
         format_knowledge=KnowledgeFormatter(slots=[user_slot]),
         format_prefix=EmptyFormatter(slots=[prefix]) if prefix else EmptyFormatter(),
+        format_function=StringFormatter(slots=[fc_slot]),
+        format_observation=StringFormatter(slots=[ob_slot]),
+        format_tools=StringFormatter(slots=[tool_slot]),
         default_system=default_system,
+        # thought_words=thought_words,
         stop_words=[],
-        thought_words=("<think>", "</think>"),
         efficient_eos=False,
         replace_eos=False,
         replace_jinja_template=False,
@@ -539,5 +593,17 @@ register_template(
     format_system=StringFormatter(slots=["{{content}}\n"]),
     format_prefix=EmptyFormatter(slots=[{"token": "<|begin_of_sentence|>"}]),
     format_knowledge=KnowledgeFormatter(slots=["User: {{content}}\nAssistant: "]),
+    replace_jinja_template=True,
+)
+
+register_template(
+    name="45t-x1",
+    format_user=StringFormatter(slots=["<|im_start|>user\n", "{{content}}<|im_end|>\n\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}", {"token": "<|im_end|>"}]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n\n"]),
+    format_function=StringFormatter(slots=["<|im_start|>assistant\n<tool_call>{{content}}</tool_call><|im_end|>\n\n"]),
+    format_observation=StringFormatter(slots=["<|im_start|>tool\n{{content}}<|im_end|>\n\n"]),
+    format_tools=StringFormatter(slots=["<tool_list>\n{{content}}</tool_list><|im_end|>\n\n"]),
+    thought_words=("<think>", "</think>"),
     replace_jinja_template=True,
 )
