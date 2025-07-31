@@ -59,12 +59,7 @@ from paddlenlp.transformers.fused_a2a import (
 )
 from paddlenlp.transformers.moe_layer import FusionMoeNode
 
-from ..fp8_utils import (
-    fp8_mlp_bwd,
-    fp8_mlp_bwd_norm_rc,
-    fp8_mlp_fwd,
-    fp8_mlp_fwd_norm_rc,
-)
+from ..fp8_utils import FP8LinearFunctionBase
 
 __all__ = [
     "DeepseekV2ForCausalLMPipe",
@@ -175,7 +170,7 @@ class PostProcessNode(ScheduleNode):
         with paddle.no_grad():
             if self.shared_experts is not None:
                 if self.using_post_norm_recompute:
-                    shared_expert_output = fp8_mlp_fwd_norm_rc(
+                    shared_expert_output = FP8LinearFunctionBase.fp8_mlp_fwd_norm_rc(
                         hidden_states,
                         self.shared_experts.norm_weight,
                         self.shared_experts.norm_eps,
@@ -183,7 +178,9 @@ class PostProcessNode(ScheduleNode):
                         self.shared_experts.w2,
                     )
                 else:
-                    shared_expert_output = fp8_mlp_fwd(hidden_states, self.shared_experts.w1, self.shared_experts.w2)
+                    _, _, shared_expert_output = FP8LinearFunctionBase.fp8_mlp_fwd(
+                        hidden_states, self.shared_experts.w1, self.shared_experts.w2
+                    )
                 final_hidden_states = final_hidden_states + shared_expert_output
 
         self.x = hidden_states
@@ -201,7 +198,7 @@ class PostProcessNode(ScheduleNode):
 
         assert not self.send_mtp_embed, "not support have mtp have yet"
         if self.using_post_norm_recompute:
-            dx = fp8_mlp_bwd_norm_rc(
+            dx = FP8LinearFunctionBase.fp8_mlp_bwd_norm_rc(
                 do3,
                 self.x,
                 self.shared_experts.norm_weight,
@@ -210,7 +207,7 @@ class PostProcessNode(ScheduleNode):
                 self.shared_experts.w2,
             )
         else:
-            dx = fp8_mlp_bwd(do3, self.x, self.shared_experts.w1, self.shared_experts.w2)
+            dx = FP8LinearFunctionBase.fp8_mlp_bwd(do3, self.x, self.shared_experts.w1, self.shared_experts.w2)
 
         self.x = None
 
