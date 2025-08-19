@@ -107,6 +107,19 @@ def paddlenlp_verison_check():
         )
 
 
+def mock_offload_optimizer():
+    """
+    mock offload optimizer
+    """
+    try:
+        from paddlenlp.trainer.utils.offload_optimizer import hack_offload_optimizer
+
+        hack_offload_optimizer()
+        logger.warning("hack_offload_optimizer called.")
+    except ImportError:
+        logger.warning("hack_offload_optimizer is not imported")
+
+
 def main():
     paddlenlp_verison_check()
     parser = PdArgumentParser((GenerateArgument, ModelConfig, ReftArgument, DataConfig, SFTConfig))
@@ -119,9 +132,18 @@ def main():
     else:
         gen_args, model_args, reft_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    if training_args.tensorwise_offload_optimizer:
+        mock_offload_optimizer()
+
     training_args.print_config(model_args, "Model")
     training_args.print_config(data_args, "Data")
     training_args.print_config(gen_args, "Generation")
+
+    if training_args.pre_alloc_memory > 0:
+        memory_size = int(training_args.pre_alloc_memory * 1024 * 1024 * 1024)
+        x = paddle.empty([memory_size], dtype=paddle.uint8)
+        logger.info(f"pre_alloc_memory size {x.shape}")
+        del x
 
     # Setup GPU & distributed training
     paddle.set_device(training_args.device)
@@ -250,7 +272,9 @@ def main():
             raise ValueError("Please set eval_with_do_generation to false in pipeline parallel mode.")
 
         model_class = AutoModelForCausalLMPipe
-
+    model_config["using_flex_token"] = model_args.using_fake_gate
+    model_config.using_fake_gate = model_args.using_fake_gate
+    print("model_config ", model_config, flush=True)
     if model_args.continue_training and not training_args.autotuner_benchmark:
         model = model_class.from_pretrained(
             model_args.model_name_or_path,
@@ -261,6 +285,7 @@ def main():
         # NOTE(gongenlei): new add autotuner_benchmark
         model = model_class.from_config(model_config, dtype=dtype)
 
+    print("model:", model, flush=True)
     if model_args.flash_mask and (not data_args.zero_padding or not model.config.use_flash_attention):
         logger.warning("`flash_mask` must use with zero padding and flash attention.")
         data_args.zero_padding = True

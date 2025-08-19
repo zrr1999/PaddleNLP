@@ -176,12 +176,13 @@ class MoELayer(nn.Layer):
         except AttributeError:
             is_fleet_init = False
 
-        if (
-            is_fleet_init
-            and dist.fleet.get_hybrid_communicate_group().get_data_parallel_world_size() > 1
-            and moe_group == "data"
-        ):
-            self.moe_group = dist.fleet.get_hybrid_communicate_group().get_data_parallel_group()
+        if is_fleet_init and dist.get_world_size() > 1:
+            if moe_group == "data":
+                self.moe_group = dist.fleet.get_hybrid_communicate_group().get_data_parallel_group()
+            elif moe_group == "expert":
+                self.moe_group = dist.fleet.get_hybrid_communicate_group().expert_parallel_group
+            else:
+                assert NotImplementedError("moe_group can only be data or expert, but given {}".format(self.moe_group))
             self.moe_rank = dist.get_rank(self.moe_group)
             self.moe_rank = 0 if self.moe_rank < 0 else self.moe_rank
             self.expert_parallel_degree = dist.get_world_size(self.moe_group)
@@ -350,8 +351,7 @@ class MoEFlexTokenLayer(nn.Layer):
         self.token_dispatcher = MoEFlexTokenDispatcher(
             self.num_local_experts, self.moe_router_topk, self.moe_num_experts, moe_group
         )
-
-        self.experts = nn.LayerList([expert_class(**expert_kwargs)] * self.num_local_experts)
+        self.experts = nn.LayerList([expert_class(**expert_kwargs) for _ in range(self.num_local_experts)])
         self.router = gate
 
     def expert_forward(self, dispatched_input, tokens_per_expert):
