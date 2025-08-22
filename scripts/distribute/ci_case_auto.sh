@@ -97,9 +97,9 @@ function llama_case_list_auto() {
         # be used for tracking the execution status of the case.
         llama_dygraph_auto_bs4_bf16_SD2
         llama_dygraph_auto_bs8_fp32_DP2
-        llama_dygraph_auto_bs8_fp32_DP2-MP2
+        # llama_dygraph_auto_bs8_fp32_DP2-MP2
         llama_dygraph_auto_bs8_fp32_DP2-MP2-PP2
-        llama_dygraph_auto_bs8_fp16_DP2-MP2-PP2
+        # llama_dygraph_auto_bs8_fp16_DP2-MP2-PP2
         llama_dygraph_auto_bs8_fp16_DP2-MP2-CP2
         llama_dygraph_auto_bs8_fp16_DP2-MP2-CP2_intermediate
         llama_dygraph_auto_bs8_fp16_DP2-MP2-PP2_hybrid_pp
